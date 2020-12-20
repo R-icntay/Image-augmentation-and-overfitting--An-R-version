@@ -1,0 +1,662 @@
+---
+title: ' '
+output:
+  html_document:
+    css: style_2.css
+    df_print: paged
+    theme: flatly
+    highlight: breezedark
+    toc: yes
+    toc_float: yes
+    code_download: TRUE
+    includes:
+      after_body: footer.html
+  html_notebook:
+    toc: yes
+---
+
+# **Image augmentation and overfitting:** An R version
+
+Hello! Welcome to the seventh **R** code walkthrough of the session ***Machine Learning Foundations*** where the awesome [Laurence Moroney](https://www.linkedin.com/in/laurence-moroney),a Developer Advocate at Google working on Artificial Intelligence, takes us through the fundamentals of building machine learned models using TensorFlow.
+
+In this episode, [Episode 6](https://www.youtube.com/watch?v=nq7_ZYJPWf0), Laurence Moroney gets us started with yet another exciting application of Machine Learning.
+Here, we look at how one can use `image augmentation` as a technique to artificially extend datasets to provide new information for the training of a neural network. This can potentially help with overfitting issues!
+
+Like the previous [R Notebooks](rpubs.eR_ic), this Notebook tries to replicate the [Python Notebook](https://colab.research.google.com/github/lmoroney/dlaicourse/blob/master/Course%202%20-%20Part%204%20-%20Lesson%202%20-%20Notebook%20(Cats%20v%20Dogs%20Augmentation).ipynb#scrollTo=gGxCD4mGHHjG) used for this episode.
+
+Before we begin, I highly recommend that you go through [Episode 7](https://www.youtube.com/watch?v=QWdYWwW6OAE) first then you can come back and implement these concepts using R. In this episode, Laurence Moroney does a really exemplary job in explaining the various transformations done by image augmentation. You should definitely check that out first. I will try and highlight some of the concepts said and add some of my own for the sake of completeness of this post but I highly recommend you listen from him first.
+
+<br>
+
+Let's start by loading the libraries required for this session.
+
+We'll be requiring some packages in the EBImage, Tidyverse and Keras(a framework for defining a neural network as a set of Sequential layers). You can have them installed as follows:
+
+For the [Tidyverse](https://www.tidyverse.org/), install the complete tidyverse with:
+```
+suppressMessages(install.packages("tidyverse"))
+```
+
+<br>
+
+[EBImage](https://bioconductor.org/packages/3.11/bioc/html/EBImage.html) is an R package distributed as part of the [Bioconductor](http://bioconductor.org/) project. To install the package, start R and enter:
+```
+install.packages("BiocManager")
+BiocManager::install("EBImage")
+```
+<br>
+The Keras R interface uses the TensorFlow backend engine by default. An elegant doucumentation for the installation of both the core Keras library as well as the TensorFlow backend can be found on the [R interface to Keras](https://keras.rstudio.com/reference/install_keras.html) website.
+
+<br>
+
+# **Let's take a step back:** Overfitting
+
+Looking back, we have had quite a run with Convolutional Neural Networks, haven't we? We started with building a classifier for clothing then built a more real-life horses&humans classifier and also had a look at a cats vs dogs classifier. One thing was common though: the concept of `overfitting`. So, how does overfitting come about? Overfitting is caused by having limited data to train on such that the Neural Network becomes too familiar with that particular dataset rendering it unable to generalize new data. This can be validated by the fact that our previous models performed extremely well in classifying the training set but not so good at classifying data it had not been exposed to such as that in the testing set. Theoretically, given infinite data, a model would be exposed to every possible aspect of the data distribution at hand and overfitting would probably not occur.
+
+So how do we fix this? :*drum rolls* `Data Augmentation`. Let's demystify this using an example.
+Consider the images below, with the left feline being an image in the training set and the feline on the right being an image in the test set.
+
+```{r, echo=FALSE, fig.cap= "Image source: Machine Learning Foundations Ep #7 - Image augmentation and overfitting"}
+
+suppressPackageStartupMessages({
+library(knitr)
+library(EBImage)
+library(dplyr)
+})
+
+
+img_files <- list.files(path = "C:/Users/keras/OneDrive - Microsoft Student Partners/Ep_7/resources", full.names = TRUE )
+readImage(img_files[1]) %>% display(method = 'raster')
+```
+<br>
+
+
+Computer vision works by extracting features from an image and then associating them with a given label. So features such as the pointy ears at the top, in the image on the left, might be indicative of a cat. If for instance we trained a model only on images such as that on the left, it may fail to correctly classify the image on the right as a cat. This is because it will be looking for `triangular shapes oriented upwards` near the top of the image, features which lack in the image on the right.
+
+What if during training, the image on the left could be rotated such that the orientation of the ears in both cats match as shown below? 
+
+```{r, echo=FALSE, fig.cap= "Image source: Machine Learning Foundations Ep #7 - Image augmentation and overfitting"}
+
+
+readImage(img_files[2]) %>% display(method = 'raster')
+```
+
+<br>
+
+Then, the probability of the model classifying the image on the right as a 'cat' is higher.
+
+Simply put, `data augmentation` is a technique used to increase the diversity of the training set by applying random (but realistic) transformations such as image rotation, shearing and zooming. Such transformations help to expose the model to more aspects of the data and in turn helping the model to generalize better.
+In this episode, the effects of some these transformations on images and how they help minimize overfitting have been neatly illustrated, so you should definitely check out 😉. 
+
+<br>
+
+# **A little sanity check on our data**
+
+First things first, let's download the [dataset](https://storage.googleapis.com/mledu-datasets/cats_and_dogs_filtered.zip) used for this episode. It is noteworthy that this particular dataset is a filtered version of the original and contains about 2,000 images. For this reason, the model is more susceptible to overfitting. However, this dataset will be a good test bed to investigate the impact of image augmentation in reducing overfitting.
+
+```{r}
+base_dir <- list.dirs(path = "C:/Users/keras/Documents/cats_and_dogs_filtered", recursive = T)
+
+sapply(base_dir, function(dir){length(list.files(dir))})
+# Awesome. Seems the hard work has already been done for us. 
+# The data is split into `Training` and `Validation` directories
+# and each of these contain the `cats` and `dogs` sub-directories.
+# There are 2000 images for training and 1000 images for validation
+
+train_dir <-  file.path("C:/Users/keras/Documents/cats_and_dogs_filtered/train")
+validation_dir <-  file.path("C:/Users/keras/Documents/cats_and_dogs_filtered/validation")
+train_cats_dir <- list.dirs(train_dir, recursive = F)[1]
+train_dogs_dir <- list.dirs(train_dir, recursive = F)[2]
+test_cats_dir <- list.dirs(validation_dir, recursive = F)[1]
+```
+
+
+```{r, fig.width=11}
+# as in the previous notebooks, let's display some of the furry creatures
+library(EBImage)
+library(dplyr)
+
+# listing the files in the train_cats_dir and train_dogs_dir
+cats_disp <- list.files(path = train_cats_dir, full.names = T) %>%
+  sample(size = 4, replace = F)
+dogs_disp <- list.files(path = train_dogs_dir, full.names = T) %>%
+  sample(size = 4, replace = F)
+
+img_disp <- sample(c(cats_disp,dogs_disp))
+
+# resizing the images since readImage {EBImage} requires all images
+# to have same dimension and color mode
+
+for(i in seq_along(img_disp)){
+  readImage(img_disp[i]) %>% 
+    resize(w = 300, h = 300) %>% 
+    writeImage(img_disp[i])
+  
+}
+  
+
+EBImage::display(
+  readImage(img_disp),
+  method = 'raster',
+  all = T,
+  nx = 4,
+  spacing = c(0,0)
+)
+
+```
+
+<br>
+
+# **Building a model that does not use image augmentation**
+
+Very quickly, from the previous sessions:
+Convolutional Neural networks use filters/kernels to process images and extract features such that after learning a certain pattern a convnet can recognize it anywhere. The convolutional layers learn the features and pass these to the dense layers which map the learned features to the given labels.
+
+<br>
+
+The pooling layer serves to progressively reduce the spatial size of the representation to reduce the number of parameters, memory footprint and amount of computation in the network. Max pooling consists of extracting windows of size 2by2 from the input feature maps and outputting the max value of each channel.
+`Pooling` hence reduces the amount of irrelevant information in an image while maintaining the features that are detected.
+
+In case you need to brush up on the concepts of CNN, [Episode 3](https://www.youtube.com/watch?v=PCgLmzkRM38&list=PLOU2XLYxmsII9mzQ-Xxug4l2o04JBrkLV&index=3) would be a good place to start.
+
+
+
+So, let's set these concepts in motion, shall we?
+
+
+### **Instantiating a Convolution**
+We’ll reuse the same general structure we've been using: the convnet will be a stack of alternated layer_conv_2d (with relu activation) and layer_max_pooling_2d stages. 
+You will notice that as we go deeper, we increase the number of filters. This is because convolutions can learn spatial hierarchies of patterns. A first convolution layer will learn small local patterns such as edges, a second convolution layer will learn larger patterns made of the features of the first layers, and so on. This allows convnets to efficiently learn increasingly complex and abstract visual concepts.
+
+```{r}
+library(keras)
+
+model <- keras_model_sequential() %>%
+  # adding the first convolution layer with 16 3by3 filters
+  # we add an additional dimension in the input shape since convolutions operate over 3D tensors
+  # the input shape tells the network that the first layer should expect
+  # images of 150 by 150 pixels with a color depth of 3 ie RGB images
+  layer_conv_2d(input_shape = c(150, 150, 3), filters = 32, kernel_size = c(3, 3), activation = 'relu' ) %>%
+  # adding a max pooling layer which halves the dimensions
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 64 filters
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 128 filters
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2))
+  
+  
+```
+
+<br>
+
+### **Adding a classifier to the convnet**
+
+Convolutional layers learn the features and pass these to the dense layers which map the learned features to the given labels. Therefore, the next step is to feed the last output tensor into a densely connected classifier network like those we’re already familiar with: a stack of dense layers.
+These classifiers process vectors, which are 1D, however, the current output is a 3D tensor. First we have to flatten the 3D outputs to 1D, and then add a few dense layers on top.
+
+Note that because we are facing a two-class classification problem, i.e. a binary classification problem, we can end our network with a [sigmoid activation](https://en.wikipedia.org/wiki/Sigmoid_function), so that the output of our network will be a single scalar between 0 and 1, encoding the probability that the current image is class 1 (as opposed to class 0). For more information about Keras activation functions, kindly visit the [Keras website](https://keras.io/api/layers/activations/).
+
+
+```{r}
+model <- model %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dense(units = 1,activation = 'sigmoid')
+  
+
+# Let’s look at how the dimensions of the feature maps change with every successive layer:
+
+model %>% summary()
+```
+
+<br>
+
+**Compile:** Configuring a Keras model for training
+
+```{r}
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = optimizer_rmsprop(lr = 0.0001),
+    metrics = 'accuracy'
+  )
+```
+Binary_ Crossentropy loss Computes the cross-entropy loss between true labels and predicted labels. Typically used when there are only two label classes.(For a refresher on loss metrics, see the [Machine Learning Crash Course](https://developers.google.com/machine-learning/crash-course/descending-into-ml/video-lecture) and the [Keras documentation](https://keras.io/api/losses/probabilistic_losses/#binary_crossentropy-function)) 
+
+<br>
+
+### **Data preprocessing**
+
+So how will we apply these `random transformations` to our images in a bid to achieve image augmentation? Good thought!
+Thankfully Keras has utilities to turn image files on disk into batches of pre-processed tensors. We'll use the `image_data_generator` to generate batches of tensor image data with real-time data augmentation.
+We'll implement image augmentation in the next example. For now, we'll only use the image generator to: 
+
+* Normalize the pixel values to the [0, 1] interval.
+* Autolabel the images of cats and dogs automatically based on the subdirectory name: - ImageGenerator will label the images appropriately for you, reducing a coding step. Sounds neat, right?
+
+```{r}
+# normalizing the data by multiplying by a rescaling factor
+train_datagen <- image_data_generator(rescale = 1/255)
+
+
+# Flow training images in batches of 20 using train_datagen generator
+train_generator <- flow_images_from_directory(
+  # target directory
+  directory = train_dir,
+  # training data generator
+  generator = train_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 20 images at a time to be fed into the NN
+  batch_size = 20,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+
+
+
+```
+
+
+Let's do the same for the validation set
+```{r}
+# normalizing the data by multiplying by a rescaling factort
+test_datagen <- image_data_generator(rescale = 1/255)
+
+
+# Flow training images in batches of 20 using test_datagen generator
+validation_generator <- flow_images_from_directory(
+  # target directory
+  directory = validation_dir,
+  # training data generator
+  generator = test_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 20 images at a time to be fed into the NN
+  batch_size = 20,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+
+
+
+```
+
+<br>
+
+### **Training the Neural Network**
+
+Training simply means learning (determining) good values for all the weights and the bias from labeled examples. It does so by 'learning' the relationship between the train_images and train_labels arrays.
+
+Let’s fit the model to the data using a generator. You do so using the
+`fit_generator {keras}` function, the equivalent for `fit` for data generators like this one. It expects as its first argument a generator that will yield batches of inputs and targets indefinitely. Because the data is being generated endlessly, the model needs to know how many samples to draw from the generator before declaring an epoch over. This is the role of the `steps_per_epoch` argument. It defines the total number of steps (batches of samples) to yield from generator before declaring one epoch finished and starting the next epoch. It should *typically* be equal to the *number of samples in your dataset divided by the batch size*.
+
+`validation_steps` describes the total number of steps (batches of samples) to yield from generator before stopping at the end of every epoch. It tells the network how many batches to draw from the validation generator for evaluation.
+
+`An epoch finishes when steps_per_epoch batches have been seen by the model.`
+
+<br>
+
+ **Fitting the model using a batch generator**
+ 
+Let's train for 100 epochs -- this may take some minutes to run.
+
+The Loss and Accuracy are a great indication of progress of training. It's making a guess as to the classification of the training data, and then measuring it against the known label, calculating the result. Accuracy is the portion of correct guesses.
+<br><br>
+
+```{r}
+history <- model %>% fit_generator(
+  generator = train_generator,
+  # Total number of steps (batches of samples) to yield
+  #before declaring one epoch finished and starting the next epoch.
+  steps_per_epoch = 100, # 2000/20
+  # An epoch is an iteration over the entire data provided
+  epochs = 100,
+  validation_data = validation_generator,
+  validation_steps = 50 # 1000/20
+  
+  
+)
+
+# It’s good practice to always save your models after training.
+
+model %>% save_model_hdf5("cats_and_dogs_filtered.h5") 
+
+# plotting the loss and accuracy over the training and validation data
+# during training
+plot(history)
+
+# A summary of how the model performed
+history
+
+```
+
+The Training Accuracy is close to 100%, and the validation accuracy is in the 70%-80% range. This is a great example of overfitting: the fact that machine learning models tend to perform worse on new data they have never 'seen' before than on their training data. It occurs when the network ends up learning representations that are specific to the training data and doesn't generalize to data outside of the training set.
+
+Let's see if we can do better to avoid overfitting -- and one simple method is to tweak the images a bit by applying random transformations such as rotation, shearing, zooming etc. That's what `image augmentation` is all about.
+
+We'll use the `image_data_generator` to generate batches of tensor image data with real-time data augmentation.
+
+Let's get started with an example.
+
+<br>
+
+# **Image augmentation:** An example
+
+All this time, we have been using the `image_data_generator` to normalize our images. We'll update a few more arguments to it and we'll be getting past `overfitting` in no time.
+
+<br>
+
+### **Setting up a data augmentation configuration via image_data_generator**
+
+```{r}
+
+datagen <- image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2,
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+
+
+```
+These are just a few of the options available (for more, see the [Keras documentation](https://keras.io/api/preprocessing/image/)). Let’s quickly go over this code:
+
+* `rotation_range` is a value in degrees (0–180), a range within which to randomly rotate pictures.
+* `width_shift` and `height_shift` are ranges (as a fraction of total width or
+height) within which to randomly translate pictures vertically or horizontally.
+* `shear_range` is for randomly applying shearing transformations.
+* `zoom_range` is for randomly zooming inside pictures.
+* `horizontal_flip` is for randomly flipping half the images horizontally—relevant when there are no assumptions of horizontal asymmetry (for example, real­world pictures).
+* `fill_mode` is the strategy used for filling in newly created pixels, which can appear after a rotation or a width/height shift.
+
+```{r}
+# choosing an image to augment
+fnames <- list.files(test_cats_dir, full.names = TRUE)
+img_path <- fnames[332]
+# original image before augmentation
+readImage(img_path) %>% resize(w = 150, h = 150) %>% display(method = 'raster')
+# Ah! 😺
+```
+
+
+```{r}
+# loading the image and resizing it
+img <- image_load(img_path, target_size = c(150, 150))
+
+# converting PIL format to an array with shape (150, 150, 3)
+img_array <- image_to_array(img)
+
+# including a batch dimension
+img_array <- array_reshape(img_array, c(1, 150, 150, 3))
+
+# generating batches of augmented images from our img_array
+augmentation_generator <- flow_images_from_data(
+  img_array, # should have rank 4
+  # generator used for augmentation
+  generator = datagen,
+  batch_size = 1
+)
+
+# Displaying some randomly augmented training images
+op <- par(mfrow = c(2,2), pty = 's', mar = c(1, 0, 1, 0))
+for (i in 1:4) {
+aug_img <- generator_next(augmentation_generator)
+plot(as.raster(aug_img[1, , , ]))
+}
+par(op)
+
+
+
+```
+
+Voila! Finally, there goes some of the random transformations we have been talking about. Such transformations help to expose the model to more aspects of the data and in turn helping the model to generalize better.
+
+
+<br>
+
+# **Getting past overfitting with data augmentation**
+
+⏲ It's time to build a model that uses Image Augmentation during training. 
+
+We'll reuse the same code as before, with the only exception being that we'll update the `image_data_generator` to perform augmentation. Here we go:
+<br>
+
+```{r}
+model <- keras_model_sequential() %>%
+  # adding the first convolution layer with 16 3by3 filters
+  # we add an additional dimension in the input shape since convolutions operate over 3D tensors
+  # the input shape tells the network that the first layer should expect
+  # images of 150 by 150 pixels with a color depth of 3 ie RGB images
+  layer_conv_2d(input_shape = c(150, 150, 3), filters = 32, kernel_size = c(3, 3), activation = 'relu' ) %>%
+  # adding a max pooling layer which halves the dimensions
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 64 filters
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 128 filters
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dense(units = 1,activation = 'sigmoid')
+
+# Compile: Configuring a Keras model for training
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = optimizer_rmsprop(lr = 0.0001),
+    metrics = 'accuracy'
+  )
+
+
+# This code has changed. Now instead of the ImageGenerator just rescaling
+# the image, we also rotate and do other operations
+# Updated to do image augmentation
+
+train_datagen <- image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2,
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+
+# Flow training images in batches of 20 using train_datagen generator
+train_generator <- flow_images_from_directory(
+  # target directory
+  directory = train_dir,
+  # training data generator
+  generator = train_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 20 images at a time to be fed into the NN
+  batch_size = 20,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+
+# training the model
+# training will take longer due to the augmentation process
+history <- model %>% fit_generator(
+  generator = train_generator,
+  # Total number of steps (batches of samples) to yield
+  #before declaring one epoch finished and starting the next epoch.
+  steps_per_epoch = 100, # 2000/20
+  # An epoch is an iteration over the entire data provided
+  epochs = 100,
+  validation_data = validation_generator,
+  validation_steps = 50 # 1000/20
+  
+  
+)
+
+# It’s good practice to always save your models after training.
+
+model %>% save_model_hdf5("cats_and_dogs_filtered_augmented.h5") 
+
+# plotting the loss and accuracy over the training and validation data
+# during training
+plot(history)
+
+# A summary of how the model performed
+history
+
+```
+Thanks to image augmentation, we are no longer overfitting. The training
+curves are closely tracking the validation curves as shown in the plots.
+Although the training accuracy is not reaching 99%+, the training accuracy is really close to the validation accuracy. This is an indication that the model is doing a good job in predicting images it has never 'seen' before.
+
+The use of image augmentation helped to increase the diversity of the training set and also reduce the model’s dependence on certain properties. As such, the model was exposed to more attributes, making it better at generalizing new data.
+
+
+<br>
+
+# **One last detour:** Adding dropout 
+
+Very simply, let's look at another commonly trick used in minimizing overfitting: `dropout`. Dropout works by randomly removing nodes along with all their incoming and outgoing connections from a neural network during training. It does this by setting to zero a number of output features of the layer during training. For instance if the output of a layer is the vector `[0.4, 0.9, 1.5, 1.8, 0.2]`, after applying dropout, this vector will have a few zero entries distributed at random: `[0.4, 0, 1.5, 1.8, 0]`. The core idea is that introducing noise in the output values of a layer will minimise the dependence on certain neurons to detect certain features hence modulating the quantity of information that your model is allowed to store. Much more elaborate information about dropout as a way of minimising overfitting can be found in this well written and researched paper: [Dropout: A Simple Way to Prevent Neural Networks from Overﬁtting](https://dl.acm.org/doi/epdf/10.5555/2627435.2670313)
+
+
+
+```{r, echo=FALSE, fig.cap= "Dropout: A Simple Way to Prevent Neural Networks from Overfitting"}
+
+
+img_files <- list.files(path = "C:/Users/keras/OneDrive - Microsoft Student Partners/Ep_7/resources", full.names = TRUE )
+readImage(img_files[3]) %>% display(method = 'raster')
+```
+
+
+
+
+
+<br>
+
+### **Getting past overfitting with data augmentation and drop out.**
+
+To further fight overfitting, we’ll try adding a dropout layer to a model, right before the densely connected classifier and see how our model performs. We'll do this by specifying a `dropout rate` (fraction of the features that are zeroed out) in `layer_dropout {keras}`.
+
+```{r}
+model <- keras_model_sequential() %>%
+  # adding the first convolution layer with 16 3by3 filters
+  # we add an additional dimension in the input shape since convolutions operate over 3D tensors
+  # the input shape tells the network that the first layer should expect
+  # images of 150 by 150 pixels with a color depth of 3 ie RGB images
+  layer_conv_2d(input_shape = c(150, 150, 3), filters = 32, kernel_size = c(3, 3), activation = 'relu' ) %>%
+  # adding a max pooling layer which halves the dimensions
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 64 filters
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding a second convolution layer with 128 filters
+  layer_conv_2d(filters = 128, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # adding dropout
+  layer_dropout(rate = 0.5) %>% 
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dense(units = 1,activation = 'sigmoid')
+
+# Compile: Configuring a Keras model for training
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = optimizer_rmsprop(lr = 0.0001),
+    metrics = 'accuracy'
+  )
+
+
+# This code has changed. Now instead of the ImageGenerator just rescaling
+# the image, we also rotate and do other operations
+# Updated to do image augmentation
+
+train_datagen <- image_data_generator(
+  rescale = 1/255,
+  rotation_range = 40,
+  width_shift_range = 0.2,
+  height_shift_range = 0.2,
+  shear_range = 0.2,
+  zoom_range = 0.2,
+  horizontal_flip = TRUE,
+  fill_mode = "nearest"
+)
+
+# Flow training images in batches of 20 using train_datagen generator
+train_generator <- flow_images_from_directory(
+  # target directory
+  directory = train_dir,
+  # training data generator
+  generator = train_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 20 images at a time to be fed into the NN
+  batch_size = 20,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+
+# training the model
+# training will take longer due to the augmentation process
+history <- model %>% fit_generator(
+  generator = train_generator,
+  # Total number of steps (batches of samples) to yield
+  #before declaring one epoch finished and starting the next epoch.
+  steps_per_epoch = 100, # 2000/20
+  # An epoch is an iteration over the entire data provided
+  epochs = 100,
+  validation_data = validation_generator,
+  validation_steps = 50 # 1000/20
+  
+  
+)
+
+# It’s good practice to always save your models after training.
+
+model %>% save_model_hdf5("cats_and_dogs_filtered_augmented_drop.h5") 
+
+# plotting the loss and accuracy over the training and validation data
+# during training
+plot(history)
+
+# A summary of how the model performed
+history
+
+```
+Well, that's the performance of our model with both augmentation and dropout implemented. As before, we have combated overfitting, and that's a step in the right direction.
+
+By using regularization techniques even further, and by tuning the network’s parameters (such as the number of filters per convolution layer, or the number of layers in the network), you may be able to get an even better accuracy.
+
+We'll wrap it here. Augmentation was quite an interesting topic to learn, share and R too 😊. A big thank you to Laurence Moroney for this amazing series, you are the best!
+
+Time to strap in for Natural Language Processing.
+
+Till then, 
+
+Happy Learning 👩🏽‍💻 👨‍💻 👨🏾‍💻 👩‍💻 ,
+
+Eric (R_ic), Microsoft Learn Student Ambassador.
+
+
+# **Reference Material**
+
+* Machine Learning Foundations: Ep #7 - [Image augmentation and overfitting](https://www.youtube.com/watch?v=QWdYWwW6OAE)
+
+* Deep Learning with R by Francois Chollet and J.J.Allaire
+
+* The [R interface to Keras](https://tensorflow.rstudio.com/learn/resources/) website.
+
+* The [Keras API Reference](https://keras.io/api/) website
+
+* Lab 7: [Lesson 2 - Notebook (Cats v Dogs Augmentation).ipynb](https://colab.research.google.com/github/lmoroney/dlaicourse/blob/master/Course%202%20-%20Part%204%20-%20Lesson%202%20-%20Notebook%20(Cats%20v%20Dogs%20Augmentation).ipynb#scrollTo=BZSlp3DAjdYf) 
+
+* [Dropout: A Simple Way to Prevent Neural Networks from Overﬁtting](https://dl.acm.org/doi/epdf/10.5555/2627435.2670313) by Nitish Srivastava, Geoﬀrey Hinton, Alex Krizhevsky, Ilya Sutskever, Ruslan Salakhutdinov.
+
+
